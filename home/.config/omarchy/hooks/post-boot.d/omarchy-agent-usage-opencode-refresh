@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Refresh the omarchy.agents panel record for OpenCode every 7.5 minutes.
+# Invoked from a post-boot hook; survives shell restarts via setsid.
+
+set -euo pipefail
+
+COLLECTOR="$HOME/.local/bin/omarchy-agent-usage-opencode"
+OUTPUT="$HOME/.local/state/omarchy/agents/usage/opencode.json"
+LOOP_FILE="$HOME/.cache/omarchy-agent-usage-opencode-loop.sh"
+PID_FILE="$HOME/.cache/omarchy-agent-usage-opencode.pid"
+INTERVAL=450
+
+[[ -x $COLLECTOR ]] || exit 0
+
+mkdir -p "$(dirname "$PID_FILE")"
+
+if [[ -f $PID_FILE ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+  exit 0
+fi
+
+cat >"$LOOP_FILE" <<EOF
+#!/usr/bin/env bash
+trap 'rm -f "$PID_FILE"' EXIT
+echo "\$\$" > "$PID_FILE"
+while true; do
+  tmp=\$(mktemp "\$OUTPUT.XXXXXX") && "\$COLLECTOR" > "\$tmp" 2>/dev/null && mv "\$tmp" "\$OUTPUT" || rm -f "\$tmp"
+  sleep $INTERVAL || true
+done
+EOF
+chmod +x "$LOOP_FILE"
+
+setsid "$LOOP_FILE" </dev/null >/dev/null 2>&1 &
+disown 2>/dev/null || true

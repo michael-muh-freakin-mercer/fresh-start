@@ -1,0 +1,45 @@
+add_newline = true
+command_timeout = 200
+format = """
+[╭─\\[ ](bright-black)$directory[ \\]](bright-black)$git_branch$git_status$cmd_duration
+[╰─](bright-black)$character"""
+
+[character]
+error_symbol = "[✗](bold red)"
+success_symbol = "[❯](bold cyan)"
+vimcmd_symbol = "[❮](bold purple)"
+
+[directory]
+style = "bold cyan"
+format = "[󰉋 $path]($style)[$read_only]($read_only_style)"
+read_only = " 󰌾"
+read_only_style = "bold red"
+truncation_length = 3
+truncation_symbol = "…/"
+repo_root_style = "bold cyan"
+repo_root_format = "[󰉋 $repo_root]($repo_root_style)[$path]($style)[$read_only]($read_only_style)"
+
+[git_branch]
+symbol = " "
+style = "bold purple"
+format = "[─\\[ ](bright-black)[$symbol$branch]($style)[ \\]](bright-black)"
+
+[git_status]
+format     = '([─\[ ](bright-black)[$all_status$ahead_behind]($style)[\]](bright-black))'
+style      = "bold yellow"
+ahead      = "⇡${count} "
+diverged   = "⇕⇡${ahead_count}⇣${behind_count} "
+behind     = "⇣${count} "
+conflicted = " "
+up_to_date = "[ ](bold green)"
+untracked  = "? "
+modified   = " "
+stashed    = ""
+staged     = "+${count} "
+renamed    = "» "
+deleted    = "✘ "
+
+[cmd_duration]
+min_time = 2_000
+style = "bold yellow"
+format = "[─\\[ ](bright-black)[󱎫 $duration]($style)[ \\]](bright-black)"

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# bench-project <name>: move a project from ~/projects/active to ~/projects/archive.
+# Refuses if there is unsaved work (uncommitted changes or commits not pushed
+# to GitHub), so nothing gets shelved that only exists on this laptop.
+# Add --force to bench anyway.
+# shellcheck disable=SC2012
+set -euo pipefail
+
+force=0
+args=()
+for a in "$@"; do
+  if [[ $a == --force ]]; then force=1; else args+=("$a"); fi
+done
+
+if [[ ${#args[@]} -ne 1 ]]; then
+  echo "Usage: bench-project <name> [--force]"
+  echo "Active projects:"
+  ls -1 "$HOME/projects/active" 2>/dev/null | sed 's/^/  /'
+  exit 1
+fi
+
+name=${args[0]}
+src="$HOME/projects/active/$name"
+dest="$HOME/projects/archive/$name"
+
+[[ -d $src ]] || { echo "Not found: $src"; exit 1; }
+[[ -e $dest ]] && { echo "Already in archive: $dest"; exit 1; }
+
+problems=()
+if git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
+  [[ -n $(git -C "$src" status --porcelain) ]] && problems+=("uncommitted changes")
+  if git -C "$src" rev-parse '@{u}' >/dev/null 2>&1; then
+    ahead=$(git -C "$src" rev-list --count '@{u}..HEAD')
+    ((ahead > 0)) && problems+=("$ahead commit(s) not pushed")
+  else
+    problems+=("no GitHub remote / upstream branch")
+  fi
+else
+  problems+=("not a git repo")
+fi
+
+if ((${#problems[@]})) && ((!force)); then
+  echo "Not benching $name yet:"
+  printf '  - %s\n' "${problems[@]}"
+  echo "Fix those (commit + push), or re-run with --force."
+  exit 1
+fi
+
+echo
+echo "Before you bench it, have you:"
+echo "  - stopped anything it runs (bots, servers)?"
+echo "  - cancelled its paid services and revoked its API keys?"
+echo "  - updated STATUS.md with where you left off?"
+if [[ -t 0 ]]; then
+  read -r -p "All done? [y/N] " reply
+  [[ $reply =~ ^[Yy] ]] || { echo "OK, not benched."; exit 1; }
+fi
+
+mkdir -p "$HOME/projects/archive"
+mv "$src" "$dest"
+echo "Benched: ~/projects/archive/$name"

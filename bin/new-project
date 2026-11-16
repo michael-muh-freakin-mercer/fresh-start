@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# new-project <name>: start a project in ~/projects/active from the template.
+# Creates the folders, fills in STATUS.md / CLAUDE.md, makes the first commit,
+# and offers to create a private GitHub repo.
+set -euo pipefail
+
+TEMPLATES="$(cd "$(dirname "$(readlink -f "$0")")/../templates" && pwd)"
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: new-project <name>     e.g.  new-project \"Tow Supply Site\""
+  exit 1
+fi
+
+name="$*"
+slug=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')
+dest="$HOME/projects/active/$slug"
+
+if [[ -z $slug ]]; then echo "That name has no letters or numbers."; exit 1; fi
+if [[ -e $dest ]]; then echo "Already exists: $dest"; exit 1; fi
+
+mkdir -p "$HOME/projects/active"
+cp -r "$TEMPLATES/project" "$dest"
+
+esc() { printf '%s' "$1" | sed 's/[\/&|]/\\&/g'; }
+for f in STATUS.md CLAUDE.md README.md; do
+  sed -i "s|{{PROJECT_NAME}}|$(esc "$name")|g; s|{{DATE}}|$(date +%F)|g" "$dest/$f"
+done
+
+cd "$dest"
+git init -q -b main
+git add -A
+git commit -q -m "Start $slug from template"
+echo "Created ~/projects/active/$slug"
+
+if [[ -t 0 ]] && command -v gh >/dev/null && gh auth status >/dev/null 2>&1; then
+  read -r -p "Create a private GitHub repo for it? [y/N] " reply
+  if [[ $reply =~ ^[Yy] ]]; then
+    gh repo create "$slug" --private --source . --push
+  fi
+fi
+
+echo
+echo "Next:  cd ~/projects/active/$slug && claude"

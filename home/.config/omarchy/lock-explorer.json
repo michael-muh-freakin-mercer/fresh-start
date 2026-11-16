@@ -1,0 +1,15 @@
+{
+  "avatar": "/home/michael/Pictures/IMG_1377.JPG",
+  "blankMs": 60000,
+  "design": "my-marquee",
+  "hideAuthIcons": true,
+  "hideCapsBadge": true,
+  "hideLayoutBadge": true,
+  "hidePasswordToggle": true,
+  "language": "ko",
+  "openAs": "panel",
+  "ownerMessage": "Fuck you if you the police!",
+  "tourSeen": true,
+  "unlock": "fade",
+  "unlockMs": 800
+}

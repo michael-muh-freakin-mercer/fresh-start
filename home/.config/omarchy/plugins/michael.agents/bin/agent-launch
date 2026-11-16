@@ -1,0 +1,53 @@
+#!/bin/bash
+# Pick a project and an agent, then start that agent in its own herdr workspace.
+# Usage: agent-launch [project-dir] [agent-kind]
+
+set -euo pipefail
+
+roots=("$HOME/Projects" "$HOME/Artificial_idiot" "$HOME/CEO-of-big-business" "$HOME/workshop" "$HOME")
+agents=(claude codex opencode hermes)
+
+dir=${1:-}
+kind=${2:-}
+
+# Git repos under the roots plus each root's direct subfolders, most recently
+# touched first.
+list_projects() {
+  for root in "${roots[@]}"; do
+    [[ -d $root ]] || continue
+    find "$root" -mindepth 1 -maxdepth 3 -name .git -not -path '*/node_modules/*' -not -path '*/.*/.git' -printf '%T@\t%h\n' 2>/dev/null
+    [[ $root == "$HOME" || -e $root/.git ]] || find "$root" -mindepth 1 -maxdepth 1 -type d -not -name '.*' -printf '%T@\t%p\n' 2>/dev/null
+  done | sort -rn | cut -f2 | awk '!seen[$0]++'
+}
+
+if [[ -z $dir ]]; then
+  options=()
+  while read -r path; do
+    options+=("󰉋	$(basename "$path")	${path/#$HOME/\~}")
+  done < <(list_projects)
+  choice=$(omarchy-menu-select "Project" "${options[@]}") || exit 0
+  dir=$(cut -f2 <<<"$choice")
+  dir=${dir/#\~/$HOME}
+fi
+[[ -d $dir ]] || { echo "No such project: $dir" >&2; exit 1; }
+
+if [[ -z $kind ]]; then
+  default=$(omarchy-default-agent 2>/dev/null || true)
+  ordered=()
+  [[ " ${agents[*]} " == *" $default "* ]] && ordered+=("$default")
+  for agent in "${agents[@]}"; do [[ $agent == "$default" ]] || ordered+=("$agent"); done
+  kind=$(omarchy-menu-select "Agent" "${ordered[@]}") || exit 0
+fi
+
+name=$(basename "$dir")
+created=$(herdr workspace create --cwd "$dir" --label "$name" --focus)
+pane=$(jq -r '.result.root_pane.pane_id' <<<"$created")
+
+"$(dirname "$0")/agent-raise"
+
+# An agent stopped at a startup prompt (e.g. "trust this folder?") reports
+# agent_not_ready. It is running and waiting on you, which the widget shows,
+# so that is not a failure.
+if ! result=$(herdr agent start "$name" --kind "$kind" --pane "$pane" 2>&1); then
+  [[ $result == *agent_not_ready* ]] || { echo "$result" >&2; exit 1; }
+fi

@@ -1,0 +1,12 @@
+# Official Arch packages. One per line, comments allowed.
+# Omarchy already ships a lot; anything already installed is skipped.
+git
+github-cli      # gh: GitHub login, clone, create repos
+keepassxc       # password manager
+gitleaks        # finds API keys in code before you push
+syncthing       # backs up ~/vault to your other devices
+jq              # reads JSON (used by clone-repos)
+foot            # terminal (config in home/.config/foot)
+socat           # used by the theme-change hook
+herdr           # agent/terminal multiplexer (Omarchy repo)
+aether          # theme maker behind switch-swirl-wallpaper (Omarchy repo)

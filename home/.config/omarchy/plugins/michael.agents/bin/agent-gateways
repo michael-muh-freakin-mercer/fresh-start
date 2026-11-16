@@ -1,0 +1,33 @@
+#!/bin/bash
+# Status and control for the agent gateway services (systemd user units).
+# Usage: agent-gateways status            -> JSON array
+#        agent-gateways start|stop|restart <unit>
+
+set -u
+units=(hermes-gateway openclaw-gateway paperclipai)
+
+case ${1:-status} in
+  status)
+    for unit in "${units[@]}"; do
+      systemctl --user show "$unit" -p Id -p ActiveState -p UnitFileState -p MemoryCurrent -p ActiveEnterTimestampMonotonic 2>/dev/null |
+        jq -Rn --arg unit "$unit" '
+          [inputs | capture("^(?<key>[^=]+)=(?<value>.*)$")] | from_entries |
+          {
+            unit: $unit,
+            active: (.ActiveState == "active"),
+            state: .ActiveState,
+            autostart: (.UnitFileState == "enabled"),
+            memoryMB: ((.MemoryCurrent | tonumber? // 0) / 1048576 | floor)
+          }'
+    done | jq -s .
+    ;;
+  start | stop | restart)
+    unit=${2:?unit required}
+    [[ " ${units[*]} " == *" $unit "* ]] || { echo "Unknown unit: $unit" >&2; exit 1; }
+    systemctl --user "$1" "$unit"
+    ;;
+  *)
+    echo "Usage: agent-gateways status | start|stop|restart <unit>" >&2
+    exit 1
+    ;;
+esac

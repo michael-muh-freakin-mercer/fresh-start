@@ -1,0 +1,133 @@
+{
+  "bar": {
+    "layout": {
+      "center": [
+        {
+          "id": "omarchy.clock",
+          "format": "dddd HH:mm",
+          "formatAlt": "d MMMM 'W'ww yyyy",
+          "verticalFormat": "h\n—\nmm\nAP"
+        }
+      ],
+      "left": [
+        {
+          "id": "io.github.tyrichards.workspaces-jap"
+        }
+      ],
+      "right": [
+        {
+          "id": "omarchy.tray"
+        },
+        {
+          "id": "michael.network"
+        },
+        {
+          "alwaysShow": true,
+          "id": "michael.indicators",
+          "items": [
+            "StayAwake"
+          ]
+        },
+        {
+          "id": "omarchy.system-update"
+        },
+        {
+          "id": "michael.power"
+        },
+        {
+          "id": "michael.agents",
+          "providers": {
+            "crush": {
+              "enabled": true
+            },
+            "hermes": {
+              "enabled": true
+            },
+            "opencode": {
+              "enabled": true
+            },
+            "openrouter": {
+              "enabled": true
+            }
+          }
+        }
+      ],
+      "centerBegin": [],
+      "centerEnd": [],
+      "tray": [
+        {
+          "id": "omarchy.elsewhen",
+          "cities": [
+            {
+              "name": "Chicago",
+              "zone": "America/Chicago"
+            },
+            {
+              "name": "Sao Paulo",
+              "zone": "America/Sao_Paulo"
+            },
+            {
+              "name": "London",
+              "zone": "Europe/London"
+            },
+            {
+              "name": "Dubai",
+              "zone": "Asia/Dubai"
+            },
+            {
+              "name": "Tokyo",
+              "zone": "Asia/Tokyo"
+            }
+          ]
+        },
+        {
+          "id": "lock-explorer",
+          "source": "~/.config/omarchy/plugins/io.github.sirjul1337.lock-explorer/BarWidget.qml",
+          "type": "qml"
+        },
+        {
+          "id": "atsokolas.daily"
+        },
+        {
+          "heroColor": "#e76fc9",
+          "iconOnly": true,
+          "id": "agx.screen-time"
+        },
+        {
+          "id": "omaplug"
+        }
+      ]
+    },
+    "position": "top",
+    "transparent": true
+  },
+  "disabledPlugins": [
+    "omarchy.lock"
+  ],
+  "idle": {
+    "lock": 300,
+    "screensaver": 150
+  },
+  "plugins": [
+    {
+      "avatar": "/home/michael/Pictures/IMG_1377.JPG",
+      "blankMs": 60000,
+      "design": "my-marquee",
+      "hideAuthIcons": true,
+      "hideCapsBadge": true,
+      "hideLayoutBadge": true,
+      "hidePasswordToggle": true,
+      "id": "io.github.sirjul1337.lock-explorer",
+      "language": "ko",
+      "openAs": "panel",
+      "ownerMessage": "Fuck you if you the police!",
+      "tourSeen": true,
+      "unlock": "fade",
+      "unlockMs": 800
+    },
+    {
+      "id": "michael.power-menu"
+    }
+  ],
+  "version": 1
+}

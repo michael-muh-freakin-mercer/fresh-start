@@ -1,0 +1,9 @@
+#!/bin/bash
+# Jump to a running herdr agent: select its pane, then raise the herdr window.
+# Usage: agent-focus <pane-id>
+
+set -u
+pane=${1:?Usage: agent-focus <pane-id>}
+
+herdr agent focus "$pane" >/dev/null 2>&1 || herdr pane focus "$pane" >/dev/null 2>&1
+exec "$(dirname "$0")/agent-raise"

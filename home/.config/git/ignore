@@ -1,0 +1,16 @@
+# Global gitignore: applies to every repo on this computer.
+# Keeps secrets from ever being committed by accident.
+.env
+.env.*
+!.env.example
+*.kdbx
+*.keyx
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.secrets/
+
+# Junk
+.DS_Store
+*.bak-*

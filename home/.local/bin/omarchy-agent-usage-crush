@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+"""Collect Crush usage into one display-ready JSON record.
+
+Crush stores sessions, messages, and token counts in a per-project SQLite
+database under each project data directory (default ~/.crush, or
+<project>/.crush for project-local sessions). The collector walks every
+known project's crush.db, aggregates the last seven days plus the all-time
+totals, and prints the record the omarchy.agents panel reads.
+
+Crush is local-only, so there are no rate limits or balance to report; the
+record leaves those empty and tells the panel the data is device-scoped.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sqlite3
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+AGENT_ID = "crush"
+AGENT_NAME = "Crush"
+AGENT_TAGLINE = "Glamorous terminal assistant"
+AUTH_HELP = "Run `crush login` to authenticate."
+SCOPE = "device"
+ACCENT_COLOR = "#d946a3"  # Charm magenta
+BAR_GLYPH = "\U000f0623"  # nf-md-sparkles — matches Charm brand
+
+REGISTRY_PATH = Path(
+    os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+) / "crush" / "projects.json"
+
+
+def number(value) -> int:
+    try:
+        return max(0, int(round(float(value or 0))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def local_date(created_at: int) -> str:
+    return datetime.fromtimestamp(int(created_at), tz=timezone.utc).astimezone().date().isoformat()
+
+
+def discover_databases() -> list[Path]:
+    """Return one crush.db per known project, with the home DB first."""
+    seen: set[Path] = set()
+    out: list[Path] = []
+    home_db = Path.home() / ".crush" / "crush.db"
+    if home_db.is_file():
+        seen.add(home_db.resolve())
+        out.append(home_db)
+    if REGISTRY_PATH.is_file():
+        try:
+            data = json.loads(REGISTRY_PATH.read_text())
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        for project in data.get("projects") or []:
+            data_dir = (project or {}).get("data_dir")
+            if not data_dir:
+                continue
+            try:
+                resolved = (Path(data_dir) / "crush.db").resolve()
+            except OSError:
+                continue
+            if resolved in seen or not resolved.is_file():
+                continue
+            seen.add(resolved)
+            out.append(resolved)
+    return out
+
+
+def has_schema(conn: sqlite3.Connection) -> bool:
+    tables = {
+        row[0]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+    return "sessions" in tables and "messages" in tables
+
+
+def scan_database(database: Path) -> dict:
+    """Return per-day counts, per-model token estimates, and per-day cost."""
+    conn = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
+    try:
+        if not has_schema(conn):
+            return {
+                "user_prompts_by_day": {},
+                "sessions_by_day": {},
+                "tokens_by_day": {},   # day -> (input, output)
+                "cost_by_day": {},     # day -> USD
+                "messages_by_day_model": {},  # (day, model) -> count
+                "total_prompts": 0,
+                "total_sessions": 0,
+                "total_cost": 0.0,
+            }
+
+        sessions_by_day: dict[str, int] = {}
+        tokens_by_day: dict[str, tuple[int, int]] = {}
+        cost_by_day: dict[str, float] = {}
+        total_sessions = 0
+        total_cost = 0.0
+        for created_at, prompt, completion, cost in conn.execute(
+            "SELECT created_at, prompt_tokens, completion_tokens, cost FROM sessions"
+        ).fetchall():
+            day = local_date(created_at)
+            sessions_by_day[day] = sessions_by_day.get(day, 0) + 1
+            inp, out = tokens_by_day.get(day, (0, 0))
+            tokens_by_day[day] = (inp + number(prompt), out + number(completion))
+            cost_value = float(cost or 0)
+            cost_by_day[day] = cost_by_day.get(day, 0.0) + cost_value
+            total_cost += cost_value
+            total_sessions += 1
+
+        user_prompts_by_day: dict[str, int] = {}
+        messages_by_day_model: dict[tuple[str, str], int] = {}
+        total_prompts = 0
+        for created_at, role, model in conn.execute(
+            "SELECT created_at, role, model FROM messages"
+        ).fetchall():
+            day = local_date(created_at)
+            if role == "user":
+                user_prompts_by_day[day] = user_prompts_by_day.get(day, 0) + 1
+                total_prompts += 1
+            if model:
+                key = (day, model)
+                messages_by_day_model[key] = messages_by_day_model.get(key, 0) + 1
+
+        return {
+            "user_prompts_by_day": user_prompts_by_day,
+            "sessions_by_day": sessions_by_day,
+            "tokens_by_day": tokens_by_day,
+            "cost_by_day": cost_by_day,
+            "messages_by_day_model": messages_by_day_model,
+            "total_prompts": total_prompts,
+            "total_sessions": total_sessions,
+            "total_cost": total_cost,
+        }
+    finally:
+        conn.close()
+
+
+def merge(into: dict, add: dict) -> None:
+    for key, value in add["user_prompts_by_day"].items():
+        into["user_prompts_by_day"][key] = (
+            into["user_prompts_by_day"].get(key, 0) + value
+        )
+    for key, value in add["sessions_by_day"].items():
+        into["sessions_by_day"][key] = into["sessions_by_day"].get(key, 0) + value
+    for key, value in add["tokens_by_day"].items():
+        inp, out = value
+        cur_in, cur_out = into["tokens_by_day"].get(key, (0, 0))
+        into["tokens_by_day"][key] = (cur_in + inp, cur_out + out)
+    for key, value in add["cost_by_day"].items():
+        into["cost_by_day"][key] = into["cost_by_day"].get(key, 0.0) + value
+    for key, value in add["messages_by_day_model"].items():
+        into["messages_by_day_model"][key] = (
+            into["messages_by_day_model"].get(key, 0) + value
+        )
+    into["total_prompts"] += add["total_prompts"]
+    into["total_sessions"] += add["total_sessions"]
+    into["total_cost"] += add["total_cost"]
+
+
+def distribute_tokens_per_model(
+    tokens_by_day: dict[str, tuple[int, int]],
+    messages_by_day_model: dict[tuple[str, str], int],
+) -> dict[str, dict[str, int]]:
+    """Spread each day's input/output tokens across its models by message count.
+
+    Crush records tokens per session but not per model, so a per-model split
+    is necessarily an estimate. An even split across the day's messages is
+    the honest null result: a session that used one model still gets all of
+    its tokens attributed to that model, and a session that mixed models
+    splits them by the number of messages each model produced.
+    """
+    out: dict[str, dict[str, int]] = {}
+    per_day_msgs: dict[str, int] = {}
+    for (_day, _model), count in messages_by_day_model.items():
+        per_day_msgs[_day] = per_day_msgs.get(_day, 0) + count
+    for (day, model), count in messages_by_day_model.items():
+        day_in, day_out = tokens_by_day.get(day, (0, 0))
+        day_total = per_day_msgs.get(day, 0)
+        if day_total == 0:
+            continue
+        share = count / day_total
+        bucket = out.setdefault(
+            model, {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
+        )
+        bucket["input"] += int(round(day_in * share))
+        bucket["output"] += int(round(day_out * share))
+    return out
+
+
+def build_record() -> dict:
+    now = datetime.now(timezone.utc).astimezone()
+    today = now.date().isoformat()
+    recent_dates = sorted(
+        {(now.date() - timedelta(days=offset)).isoformat() for offset in range(7)}
+    )
+
+    databases = discover_databases()
+    agg = {
+        "user_prompts_by_day": {},
+        "sessions_by_day": {},
+        "tokens_by_day": {},
+        "cost_by_day": {},
+        "messages_by_day_model": {},
+        "total_prompts": 0,
+        "total_sessions": 0,
+        "total_cost": 0.0,
+    }
+    for db in databases:
+        merge(agg, scan_database(db))
+
+    if not databases:
+        return {
+            "schemaVersion": 1,
+            "id": AGENT_ID,
+            "name": AGENT_NAME,
+            "updatedAt": now.isoformat(timespec="seconds"),
+            "ready": False,
+            "hasLocalStats": False,
+            "scope": SCOPE,
+            "usageStatusText": "",
+            "authHelpText": AUTH_HELP,
+            "limits": [],
+            "tierLabel": "",
+            "todayPrompts": 0,
+            "todaySessions": 0,
+            "todayTotalTokens": 0,
+            "todayTokensByModel": {},
+            "recentDays": [{"date": d, "messageCount": 0} for d in recent_dates],
+            "totalPrompts": 0,
+            "totalSessions": 0,
+            "activeDays": 0,
+            "activeDates": [],
+            "modelUsage": {},
+        }
+
+    recent_days = [
+        {
+            "date": day,
+            "messageCount": sum(agg["tokens_by_day"].get(day, (0, 0))),
+        }
+        for day in recent_dates
+    ]
+    today_in, today_out = agg["tokens_by_day"].get(today, (0, 0))
+    active_dates = set(agg["sessions_by_day"].keys())
+    model_usage = distribute_tokens_per_model(
+        agg["tokens_by_day"], agg["messages_by_day_model"]
+    )
+    today_msgs_by_model = {
+        (d, m): c for (d, m), c in agg["messages_by_day_model"].items() if d == today
+    }
+    today_model_split = distribute_tokens_per_model(
+        {today: (today_in, today_out)}, today_msgs_by_model
+    )
+    today_tokens_by_model = {
+        m: int(b["input"]) + int(b["output"]) for m, b in today_model_split.items()
+    }
+
+    # Cost today / week from OpenRouter key billing when available (ground truth
+    # after cache discounts), falling back to local session.cost estimates.
+    today_cost = round(agg["cost_by_day"].get(today, 0.0), 2)
+    week_cost = round(sum(agg["cost_by_day"].get(d, 0.0) for d in recent_dates), 2)
+    total_cost = round(agg["total_cost"], 2)
+    balance = None
+    tier_label = "Local"
+
+    or_snap = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")) / "omarchy" / "agents" / "openrouter-snapshot.json"
+    if or_snap.is_file():
+        try:
+            snap_data = json.loads(or_snap.read_text())
+            entry = ((snap_data or {}).get("byName") or {}).get(AGENT_ID) or {}
+            raw = entry.get("raw") or {}
+            if raw:
+                today_cost = round(float(raw.get("usage_daily") or 0.0), 2)
+                week_cost = round(float(raw.get("usage_weekly") or 0.0), 2)
+                total_cost = round(float(raw.get("usage") or 0.0), 2)
+                lim = raw.get("limit")
+                rem = raw.get("limit_remaining")
+                if lim is not None and float(lim) > 0 and rem is not None:
+                    balance = {
+                        "remaining": round(max(0.0, float(rem)), 6),
+                        "funded": round(float(lim), 2),
+                        "spent": round(max(0.0, float(lim) - float(rem)), 2),
+                        "currency": "USD",
+                        "estimated": False,
+                    }
+                masked = entry.get("maskedShort") or ""
+                tier_label = f"OpenRouter {masked}".strip()
+        except Exception:
+            pass
+
+    has_spend = total_cost > 0.0 or agg["total_sessions"] > 0 or balance is not None
+    usage_status_text = "Spend" if has_spend else ""
+    auth_help = AUTH_HELP
+    if has_spend:
+        auth_help = (
+            f"${today_cost:.2f} today \u00b7 ${week_cost:.2f} this week \u00b7 ${total_cost:.2f} all-time"
+        )
+
+    return {
+        "schemaVersion": 1,
+        "id": AGENT_ID,
+        "name": AGENT_NAME,
+        "tagline": AGENT_TAGLINE,
+        "color": ACCENT_COLOR,
+        "barGlyph": BAR_GLYPH,
+        "updatedAt": now.isoformat(timespec="seconds"),
+        "ready": True,
+        "hasLocalStats": True,
+        "scope": SCOPE,
+        "usageStatusText": usage_status_text,
+        "authHelpText": auth_help,
+        "limits": [],
+        "tierLabel": tier_label,
+        "balance": balance,
+        "todayPrompts": agg["user_prompts_by_day"].get(today, 0),
+        "todaySessions": agg["sessions_by_day"].get(today, 0),
+        "todayTotalTokens": today_in + today_out,
+        "todayTokensByModel": today_tokens_by_model,
+        "recentDays": recent_days,
+        "totalPrompts": agg["total_prompts"],
+        "totalSessions": agg["total_sessions"],
+        "activeDays": len(active_dates),
+        "activeDates": sorted(active_dates),
+        "modelUsage": {
+            model: {
+                "inputTokens": int(bucket["input"]),
+                "outputTokens": int(bucket["output"]),
+                "cacheReadInputTokens": int(bucket.get("cacheRead", 0)),
+                "cacheCreationInputTokens": int(bucket.get("cacheWrite", 0)),
+            }
+            for model, bucket in model_usage.items()
+        },
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--force", action="store_true")
+    parser.add_argument("--limits-only", action="store_true")
+    parser.add_argument("-h", "--help", action="store_true")
+    args = parser.parse_args()
+    if args.help:
+        print(__doc__, file=sys.stderr)
+        return 0
+    record = build_record()
+    json.dump(record, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

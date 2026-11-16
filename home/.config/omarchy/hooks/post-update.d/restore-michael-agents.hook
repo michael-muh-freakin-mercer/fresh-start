@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Ensure the user's custom michael.agents bar widget stays active across
+# omarchy updates if a migration rewrites shell.json to omarchy.agents.
+
+set -euo pipefail
+
+CONFIG_FILE="$HOME/.config/omarchy/shell.json"
+PLUGIN_DIR="$HOME/.config/omarchy/plugins/michael.agents"
+
+[[ -s $CONFIG_FILE && -d $PLUGIN_DIR ]] || exit 0
+
+if jq -e '
+  [(.bar.layout // {}) | to_entries[] | .value | select(type == "array") | .[] | (if type == "object" then .id else . end)]
+  | any(. == "omarchy.agents")
+' "$CONFIG_FILE" >/dev/null 2>&1; then
+  tmp=$(mktemp "$CONFIG_FILE.XXXXXX")
+  if jq '
+    def use_clone:
+      if . == "omarchy.agents" then "michael.agents"
+      elif type == "object" and .id == "omarchy.agents" then .id = "michael.agents"
+      else .
+      end;
+    if (.bar.layout? | type) == "object" then
+      .bar.layout |= map_values(if type == "array" then map(use_clone) else . end)
+    else . end
+  ' "$CONFIG_FILE" >"$tmp"; then
+    cat "$tmp" >"$CONFIG_FILE"  # write through, so a dotfiles link survives
+    rm -f "$tmp"
+  else
+    rm -f "$tmp"
+  fi
+fi

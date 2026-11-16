@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# clone-repos: clone every repo you own on GitHub into ~/projects/archive.
+# Skips forks, the dotfiles repo itself, and anything already under ~/projects.
+# Then use `unbench-project <name>` for the ones you're actively working on.
+set -euo pipefail
+
+dest="${1:-$HOME/projects/archive}"
+
+if ! gh auth status >/dev/null 2>&1; then
+  echo "Log in first: gh auth login"
+  exit 1
+fi
+
+mkdir -p "$dest"
+cloned=0 skipped=0
+
+while read -r full name; do
+  [[ -z $name ]] && continue
+  if [[ $name == dotfiles ]]; then continue; fi
+  if find "$HOME/projects" -mindepth 2 -maxdepth 2 -type d -name "$name" -print -quit 2>/dev/null | grep -q .; then
+    skipped=$((skipped + 1))
+    continue
+  fi
+  echo "Cloning $full"
+  gh repo clone "$full" "$dest/$name" -- --quiet
+  cloned=$((cloned + 1))
+done < <(gh repo list --source --limit 500 --json nameWithOwner,name --jq '.[] | "\(.nameWithOwner) \(.name)"')
+
+echo "Cloned $cloned, skipped $skipped already present."

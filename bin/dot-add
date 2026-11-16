@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# dot-add <file>...: start tracking a config file in ~/dotfiles.
+# Moves the file into ~/dotfiles/home (same path) and leaves a link behind,
+# so the app keeps working and your edits land in the repo.
+set -euo pipefail
+
+DOTFILES="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
+
+if [[ $# -lt 1 ]]; then
+  echo "Usage: dot-add <file>...     e.g.  dot-add ~/.config/hypr/bindings.conf"
+  exit 1
+fi
+
+for f in "$@"; do
+  abs=$(realpath -s "$f")
+  if [[ $abs != "$HOME"/* ]]; then echo "Skip $f: only files under your home folder"; continue; fi
+  if [[ -L $abs ]]; then echo "Skip $f: already a link (tracked?)"; continue; fi
+  if [[ ! -f $abs ]]; then echo "Skip $f: not a file"; continue; fi
+  case "$abs" in
+    *.env | *.env.* | *.kdbx | *.pem | *.key | */.ssh/* | */.secrets/*)
+      echo "Skip $f: looks like a secret, keep it out of git"; continue ;;
+  esac
+
+  rel=${abs#"$HOME/"}
+  target="$DOTFILES/home/$rel"
+  if [[ -e $target ]]; then echo "Skip $f: already in dotfiles"; continue; fi
+
+  mkdir -p "$(dirname "$target")"
+  mv "$abs" "$target"
+  ln -s "$target" "$abs"
+  echo "Tracking ~/$rel"
+done
+
+echo
+echo "Save it:  cd ~/dotfiles && git add -A && git commit -m \"Track configs\" && git push"

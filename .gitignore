@@ -1,0 +1,21 @@
+# Never commit secrets or the password vault
+.env
+.env.*
+!.env.example
+*.kdbx
+*.keyx
+*.pem
+*.key
+.secrets/
+
+# Backups bootstrap makes
+*.bak-*
+
+# Agent API keys (agents widget) and other secrets under ~/.config
+home/.config/omarchy/agents/
+secrets/
+
+# Editor/manual backup copies
+*.bak
+*.bak.*
+*.before-*

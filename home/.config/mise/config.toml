@@ -1,0 +1,5 @@
+[tools]
+uv = "latest"
+
+[settings.upgrade]
+auto_prune = true

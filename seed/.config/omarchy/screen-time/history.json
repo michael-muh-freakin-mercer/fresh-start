@@ -1,0 +1,281 @@
+{
+    "days": {
+        "2026-10-24": {
+            "apps": {
+                "bash": 657399,
+                "chatgpt": 10911,
+                "chromium": 811848,
+                "com.microsoft.VSCode": 60564,
+                "com.obsproject.Studio": 2638,
+                "crush": 609243,
+                "cursor": 294561,
+                "electron": 2740,
+                "firefox": 4094185,
+                "herdr": 3196947,
+                "nvim": 102839,
+                "omawrite": 13258,
+                "org.omarchy.agent": 4944,
+                "org.omarchy.btop": 9748
+            },
+            "total": 9871825
+        },
+        "2026-10-25": {
+            "apps": {
+                "bash": 1291734,
+                "chromium": 384318,
+                "claude": 859428,
+                "crush": 434445,
+                "firefox": 7889175,
+                "herdr": 652655,
+                "hyprland-dialog": 1025,
+                "nvim": 340543,
+                "org.gnome.Nautilus": 593671,
+                "sudo": 36518
+            },
+            "total": 12483512
+        },
+        "2026-10-27": {
+            "apps": {
+                "bash": 8535,
+                "firefox": 2294224,
+                "herdr": 232128,
+                "tmux": 25005
+            },
+            "total": 2559892
+        },
+        "2026-10-28": {
+            "apps": {
+                "bash": 5158,
+                "chromium": 1329,
+                "claude": 31117,
+                "firefox": 850919,
+                "herdr": 12585069,
+                "omawrite": 13208,
+                "org.gnome.Nautilus": 73091
+            },
+            "total": 13559891
+        },
+        "2026-10-29": {
+            "apps": {
+                "bash": 427828,
+                "chromium": 106954,
+                "firefox": 1781541,
+                "herdr": 3510261,
+                "nvim": 116337,
+                "org.gnome.Nautilus": 26918
+            },
+            "total": 5969839
+        },
+        "2026-10-30": {
+            "apps": {
+                "bash": 16503584,
+                "chromium": 7029,
+                "claude": 1891001,
+                "firefox": 1925079,
+                "nvim": 62060,
+                "ollama": 18096,
+                "sudo": 17018,
+                "systemctl": 4609
+            },
+            "total": 20428476
+        },
+        "2026-10-31": {
+            "apps": {
+                "bash": 466325,
+                "chromium": 2682,
+                "claude": 7948182,
+                "dev.tensaku.Tensaku": 4167,
+                "firefox": 386352,
+                "org.gnome.Nautilus": 8965
+            },
+            "total": 8816673
+        },
+        "2026-11-01": {
+            "apps": {
+                "bash": 282907,
+                "claude": 14264,
+                "firefox": 447761,
+                "herdr": 1340074,
+                "imv": 6877,
+                "org.gnome.Nautilus": 73163
+            },
+            "total": 2165046
+        },
+        "2026-11-02": {
+            "apps": {
+                "KeePassXC": 85546,
+                "bash": 64565,
+                "chromium": 72683,
+                "claude": 88090,
+                "firefox": 775402,
+                "udiskie": 4185
+            },
+            "total": 1090471
+        },
+        "2026-11-03": {
+            "apps": {
+                "agy": 236166,
+                "bash": 890228,
+                "btop": 1952477,
+                "chrome-maps.google.com": 2122,
+                "claude": 19825478,
+                "code": 3856,
+                "com.microsoft.VSCode": 274098,
+                "firefox": 3784887,
+                "foot": 25563,
+                "herdr": 393696,
+                "libreoffice-calc": 2152,
+                "libreoffice-writer": 110143,
+                "omawrite": 27791,
+                "org.gnome.Nautilus": 76637
+            },
+            "total": 27605294
+        },
+        "2026-11-04": {
+            "apps": {
+                "bash": 15819,
+                "claude": 1966386,
+                "firefox": 401549,
+                "libreoffice-writer": 2604,
+                "omawrite": 104057,
+                "org.gnome.Nautilus": 21547,
+                "soffice": 2320
+            },
+            "total": 2514282
+        },
+        "2026-11-05": {
+            "apps": {
+                "bash": 3993723,
+                "claude": 10777434
+            },
+            "total": 14771157
+        },
+        "2026-11-06": {
+            "apps": {
+                "bash": 2611041,
+                "claude": 9860770,
+                "firefox": 130689,
+                "omawrite": 18548,
+                "org.gnome.Nautilus": 390730
+            },
+            "total": 13011778
+        },
+        "2026-11-07": {
+            "apps": {
+                "firefox": 336497,
+                "omacalc": 651,
+                "org.gnome.Nautilus": 2492
+            },
+            "total": 339640
+        },
+        "2026-11-08": {
+            "apps": {
+                "Plymouthd": 93793,
+                "bash": 2808370,
+                "btop": 1910081,
+                "chromium": 4967439,
+                "claude": 2183763,
+                "com.anthropic.Claude": 4392439,
+                "firefox": 2229156,
+                "foot": 5236,
+                "herdr": 23369672,
+                "imv": 5742,
+                "nvim": 852866,
+                "omacalc": 124,
+                "omawrite": 545151,
+                "org.gnome.Nautilus": 870661,
+                "org.omarchy.agent": 20743,
+                "sudo": 71997
+            },
+            "total": 44327233
+        },
+        "2026-11-09": {
+            "apps": {
+            },
+            "total": 0
+        },
+        "2026-11-12": {
+            "apps": {
+                "bash": 237278,
+                "btop": 58388,
+                "chromium": 139041,
+                "claude": 3072507,
+                "crush": 103414,
+                "firefox": 337763,
+                "ghostty": 9810,
+                "herdr": 3192039,
+                "imv": 132167,
+                "nvim": 31421,
+                "org.gnome.Nautilus": 95414
+            },
+            "total": 7409242
+        },
+        "2026-11-13": {
+            "apps": {
+                "KeePassXC": 22611,
+                "balenaetcher": 428366,
+                "bash": 129561,
+                "chromium": 390202,
+                "claude": 4054219,
+                "com.microsoft.VSCode": 137439,
+                "firefox": 3374684,
+                "ghostty": 25369,
+                "nvim": 429160,
+                "omawrite": 92407,
+                "org.gnome.DiskUtility": 92309,
+                "org.gnome.Nautilus": 239091,
+                "sh": 5159
+            },
+            "total": 9420577
+        },
+        "2026-11-14": {
+            "apps": {
+                "Hermes": 74758,
+                "bash": 168753,
+                "chrome-omarchy.org": 50161,
+                "chromium": 42792,
+                "firefox": 61734,
+                "ghostty": 10093,
+                "herdr": 162819,
+                "sh": 5176
+            },
+            "total": 576286
+        },
+        "2026-11-15": {
+            "apps": {
+                "bash": 10260,
+                "claude": 365433,
+                "com.anthropic.Claude": 1424698,
+                "herdr": 10091,
+                "imv": 4091,
+                "org.gnome.Evince": 10900,
+                "org.gnome.Nautilus": 527143
+            },
+            "total": 2352616
+        },
+        "2026-11-16": {
+            "apps": {
+                "KeePassXC": 3938228,
+                "bash": 5135,
+                "chatgpt": 8676,
+                "chromium": 1266795,
+                "claude": 10286611,
+                "com.anthropic.Claude": 378666,
+                "com.microsoft.VSCode": 18394,
+                "firefox": 5653882,
+                "gcr-prompter": 273787,
+                "keepassxc": 360865,
+                "md.obsidian.Obsidian": 28135,
+                "omawrite": 236071,
+                "org.gnome.DiskUtility": 532106,
+                "org.gnome.Nautilus": 931530,
+                "org.omarchy.agent": 12703
+            },
+            "total": 23931584
+        }
+    },
+    "months": {
+    },
+    "years": {
+    }
+}

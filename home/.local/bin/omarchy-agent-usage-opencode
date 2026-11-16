@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""Collect OpenCode usage into one display-ready JSON record.
+
+OpenCode keeps everything in one SQLite DB at
+~/.local/share/opencode/opencode.db (WAL mode, v1.18.x ships legacy
+message+part + V2 session_message). The collector:
+
+  - reads session-level cost and 5 token buckets straight off the session
+    row (no per-message join needed)
+  - parses session.model as JSON to extract providerID + model id; the
+    panel reads better with the bare model id (drops the "openrouter/"
+    prefix so OpenCode sessions merge with Crush and Hermes by-model)
+  - counts user-role prompts via json_extract on the legacy `message`
+    table, which is wrapped in try/except so a V2-only install gracefully
+    falls back to session-count as a proxy
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+AGENT_ID = "opencode"
+AGENT_NAME = "OpenCode"
+AGENT_TAGLINE = "The open-source coding agent"
+SCOPE = "device"
+ACCENT_COLOR = "#10b981"  # emerald — terminal-green feel
+BAR_GLYPH = "\U000f0f58"  # nf-md-robot — autonomous coding agent
+
+OPENCODE_DB = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
+RO_BUSY_TIMEOUT_MS = 1500
+
+
+def open_readonly(path: Path) -> sqlite3.Connection:
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn.execute(f"PRAGMA busy_timeout = {RO_BUSY_TIMEOUT_MS}")
+    return conn
+
+
+def has_table(conn: sqlite3.Connection, table: str) -> bool:
+    return bool(
+        conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+            (table,),
+        ).fetchall()
+    )
+
+
+def day_from_ms(ms: int) -> str:
+    return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).astimezone().date().isoformat()
+
+
+def fresh_bucket() -> dict:
+    return {
+        "sessions": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read": 0,
+        "cache_write": 0,
+        "reasoning": 0,
+        "cost": 0.0,
+        "user_prompts": 0,
+    }
+
+
+def scan(db_path: Path) -> dict:
+    out = {"by_day": {}, "model_tokens": {}}
+    if not db_path.is_file():
+        return out
+    try:
+        conn = open_readonly(db_path)
+    except (sqlite3.OperationalError, OSError):
+        return out
+    try:
+        if not has_table(conn, "session"):
+            return out
+
+        for row in conn.execute(
+            """SELECT time_created,
+                      json_extract(model, '$.id') AS model_id,
+                      json_extract(model, '$.providerID') AS provider,
+                      tokens_input, tokens_output, tokens_reasoning,
+                      tokens_cache_read, tokens_cache_write, cost
+               FROM session
+               WHERE time_created IS NOT NULL"""
+        ).fetchall():
+            time_created, model_id, provider, ti, to, tr, tcr, tcw, cost = row
+            if not time_created:
+                continue
+            day = day_from_ms(time_created)
+            bucket = out["by_day"].setdefault(day, fresh_bucket())
+            bucket["sessions"] += 1
+            bucket["input_tokens"] += max(0, int(ti or 0))
+            bucket["output_tokens"] += max(0, int(to or 0))
+            bucket["cache_read"] += max(0, int(tcr or 0))
+            bucket["cache_write"] += max(0, int(tcw or 0))
+            bucket["reasoning"] += max(0, int(tr or 0))
+            bucket["cost"] += float(cost or 0)
+            if model_id:
+                # Drop the upstream-router prefix so all three CLIs merge by
+                # model. Crush and Hermes already store bare names; OpenCode's
+                # session.model.id is the same string but session.model.
+                # providerID would prepend "openrouter/". Crush's bare
+                # "deepseek/deepseek-v4.1-flash" must collide with this one,
+                # not be a separate key.
+                key = model_id
+                tok = out["model_tokens"].setdefault(
+                    key, {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
+                )
+                tok["input"] += max(0, int(ti or 0))
+                tok["output"] += max(0, int(to or 0))
+                tok["cache_read"] += max(0, int(tcr or 0))
+                tok["cache_write"] += max(0, int(tcw or 0))
+
+        # User prompt count via JSON extraction on the legacy message table.
+        # V2-only installs leave message empty; we silently degrade to
+        # session-count as the prompt proxy for those.
+        if has_table(conn, "message"):
+            try:
+                for row in conn.execute(
+                    """SELECT time_created
+                       FROM message
+                       WHERE time_created IS NOT NULL
+                         AND json_extract(data, '$.role') = 'user'"""
+                ).fetchall():
+                    (time_created,) = row
+                    if not time_created:
+                        continue
+                    day = day_from_ms(time_created)
+                    bucket = out["by_day"].setdefault(day, fresh_bucket())
+                    bucket["user_prompts"] += 1
+            except sqlite3.OperationalError:
+                pass
+    except sqlite3.OperationalError:
+        return out
+    finally:
+        conn.close()
+    return out
+
+
+def day_token_total(bucket: dict) -> int:
+    return (
+        bucket["input_tokens"]
+        + bucket["output_tokens"]
+        + bucket["cache_read"]
+        + bucket["cache_write"]
+    )
+
+
+def build_record() -> dict:
+    now = datetime.now(timezone.utc).astimezone()
+    today = now.date().isoformat()
+    recent_dates = sorted(
+        {(now.date() - timedelta(days=offset)).isoformat() for offset in range(7)}
+    )
+
+    scan_result = scan(OPENCODE_DB)
+    by_day = scan_result["by_day"]
+    model_tokens = scan_result["model_tokens"]
+
+    recent_days = [
+        {"date": day, "messageCount": day_token_total(by_day.get(day, fresh_bucket()))}
+        for day in recent_dates
+    ]
+
+    today_bucket = by_day.get(today, fresh_bucket())
+    today_sessions = today_bucket["sessions"]
+    today_prompts = max(today_bucket["user_prompts"], today_sessions)
+    today_tokens = day_token_total(today_bucket)
+    today_cost = round(today_bucket["cost"], 2)
+
+    week_cost = round(
+        sum(by_day.get(d, fresh_bucket())["cost"] for d in recent_dates), 2
+    )
+    week_sessions = sum(by_day.get(d, fresh_bucket())["sessions"] for d in recent_dates)
+    total_sessions = sum(b["sessions"] for b in by_day.values())
+    total_prompts = max(sum(b["user_prompts"] for b in by_day.values()), total_sessions)
+    total_cost = round(sum(b["cost"] for b in by_day.values()), 2)
+    active_dates = sorted(by_day.keys())
+    balance = None
+    tier_label = "Local"
+
+    or_snap = Path(os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")) / "omarchy" / "agents" / "openrouter-snapshot.json"
+    if or_snap.is_file():
+        try:
+            snap_data = json.loads(or_snap.read_text())
+            entry = ((snap_data or {}).get("byName") or {}).get(AGENT_ID) or {}
+            raw = entry.get("raw") or {}
+            if raw:
+                today_cost = round(float(raw.get("usage_daily") or 0.0), 2)
+                week_cost = round(float(raw.get("usage_weekly") or 0.0), 2)
+                total_cost = round(float(raw.get("usage") or 0.0), 2)
+                lim = raw.get("limit")
+                rem = raw.get("limit_remaining")
+                if lim is not None and float(lim) > 0 and rem is not None:
+                    balance = {
+                        "remaining": round(max(0.0, float(rem)), 6),
+                        "funded": round(float(lim), 2),
+                        "spent": round(max(0.0, float(lim) - float(rem)), 2),
+                        "currency": "USD",
+                        "estimated": False,
+                    }
+                masked = entry.get("maskedShort") or ""
+                tier_label = f"OpenRouter {masked}".strip()
+        except Exception:
+            pass
+
+    sorted_models = sorted(
+        model_tokens.items(),
+        key=lambda kv: sum(kv[1].values()),
+        reverse=True,
+    )[:8]
+
+    if total_sessions == 0:
+        usage_status_text = "Awaiting first run"
+    elif today_sessions == 0 and today_prompts == 0 and today_cost == 0:
+        usage_status_text = "Quiet today"
+    elif today_cost > 0:
+        usage_status_text = "Today's run"
+    else:
+        usage_status_text = "Active"
+
+    auth_help_parts = [f"${today_cost:.2f} today"]
+    if total_sessions > 0 or week_cost > 0 or week_sessions > 0:
+        auth_help_parts.append(f"${week_cost:.2f} this week")
+    if total_sessions > 0 or total_cost > 0:
+        auth_help_parts.append(f"${total_cost:.2f} all-time across {total_sessions} sessions")
+    auth_help = " · ".join(auth_help_parts)
+
+    return {
+        "schemaVersion": 1,
+        "id": AGENT_ID,
+        "name": AGENT_NAME,
+        "tagline": AGENT_TAGLINE,
+        "color": ACCENT_COLOR,
+        "barGlyph": BAR_GLYPH,
+        "updatedAt": now.isoformat(timespec="seconds"),
+        "ready": total_sessions > 0 or balance is not None,
+        "hasLocalStats": total_sessions > 0,
+        "scope": SCOPE,
+        "usageStatusText": usage_status_text,
+        "authHelpText": auth_help,
+        "limits": [],
+        "tierLabel": tier_label,
+        "balance": balance,
+        "todayPrompts": today_prompts,
+        "todaySessions": today_sessions,
+        "todayTotalTokens": today_tokens,
+        "todayTokensByModel": {},
+        "recentDays": recent_days,
+        "totalPrompts": total_prompts,
+        "totalSessions": total_sessions,
+        "activeDays": len(active_dates),
+        "activeDates": active_dates,
+        "modelUsage": {
+            model: {
+                "inputTokens": int(tok["input"]),
+                "outputTokens": int(tok["output"]),
+                "cacheReadInputTokens": int(tok["cache_read"]),
+                "cacheCreationInputTokens": int(tok["cache_write"]),
+            }
+            for model, tok in sorted_models
+        },
+    }
+
+
+def main() -> int:
+    record = build_record()
+    json.dump(record, sys.stdout, indent=2)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

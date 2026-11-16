@@ -1,0 +1,481 @@
+#!/usr/bin/env python3
+"""Collect OpenRouter account state across all live and recorded API keys.
+
+Reads ~/.config/omarchy/agents/openrouter.json (plus auto-discovered keys from
+Crush, Hermes, OpenCode, and Paperclip). Polls https://openrouter.ai/api/v1/auth/key
+in parallel for all keys with a full `sk-or-v1-...` token, merges any
+dashboard-recorded keys (`recordedKeys`, such as rotated or disabled keys where
+only the 3-char suffix and spend are known), writes per-agent aggregates to
+~/.cache/omarchy/agents/openrouter-snapshot.json, and writes the display record
+to ~/.local/state/omarchy/agents/usage/openrouter.json.
+"""
+
+from __future__ import annotations
+
+import concurrent.futures
+import json
+import os
+import re
+import sys
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+AGENT_ID = "openrouter"
+AGENT_NAME = "OpenRouter"
+AGENT_TAGLINE = "All your models, one bill"
+AUTH_HELP_DEFAULT = "Add keys to ~/.config/omarchy/agents/openrouter.json"
+API_URL = "https://openrouter.ai/api/v1/auth/key"
+ACCENT_COLOR = "#5a67f8"
+BAR_GLYPH = "\U000f0244"
+
+CACHE_DIR = Path(
+    os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
+) / "omarchy" / "agents"
+CACHE_FILE = CACHE_DIR / "openrouter-snapshot.json"
+
+STATE_DIR = Path(
+    os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+) / "omarchy" / "agents" / "usage"
+STATE_FILE = STATE_DIR / "openrouter.json"
+
+OVERRIDE_FILE = Path(
+    os.environ.get("OMARCHY_AGENTS_DIR") or str(Path.home() / ".config" / "omarchy" / "agents")
+) / "openrouter.json"
+
+CACHE_TTL_SECONDS = 300
+READ_TIMEOUT = 12
+USER_AGENT = "omarchy-agent-usage-openrouter/2.1"
+
+KEY_REGEX = re.compile(r"sk-or-v1-[0-9a-f]{64}")
+
+DISPLAY_NAMES = {
+    "crush": "crush_",
+    "hermes": "Hermes",
+    "opencode": "Default key",
+    "paperclip": "Paperclipai",
+}
+
+
+def Number(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def NumberOrNone(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def round_money(value: float) -> float:
+    return round(float(value) + 1e-9, 2)
+
+
+def extract_first_key(path: Path) -> str | None:
+    if not path.is_file():
+        return None
+    try:
+        matches = KEY_REGEX.findall(path.read_text(errors="ignore"))
+        return matches[0] if matches else None
+    except OSError:
+        return None
+
+
+def load_config() -> tuple[list[dict], list[dict]]:
+    """Return (live_key_specs, recorded_key_specs)."""
+    home = Path.home()
+    live_specs: list[dict] = []
+    recorded_specs: list[dict] = []
+    auto_discover = True
+
+    if OVERRIDE_FILE.is_file():
+        try:
+            cfg = json.loads(OVERRIDE_FILE.read_text())
+        except (OSError, json.JSONDecodeError):
+            cfg = {}
+        if isinstance(cfg, dict):
+            if cfg.get("autoDiscover") is False:
+                auto_discover = False
+            raw_keys = cfg.get("keys")
+            if isinstance(raw_keys, dict):
+                for k_id, val in raw_keys.items():
+                    if isinstance(val, str) and val.strip():
+                        live_specs.append({
+                            "id": str(k_id),
+                            "label": DISPLAY_NAMES.get(str(k_id).lower(), str(k_id)),
+                            "agent": str(k_id).lower(),
+                            "key": val.strip(),
+                        })
+                    elif isinstance(val, dict):
+                        token = str(val.get("key") or val.get("apiKey") or "").strip()
+                        if token:
+                            live_specs.append({
+                                "id": str(k_id),
+                                "label": str(val.get("label") or val.get("name") or DISPLAY_NAMES.get(str(k_id).lower(), k_id)),
+                                "agent": str(val.get("agent") or k_id).lower(),
+                                "key": token,
+                            })
+            elif isinstance(raw_keys, list):
+                for idx, item in enumerate(raw_keys):
+                    if isinstance(item, str) and item.strip():
+                        live_specs.append({
+                            "id": f"key-{idx+1}",
+                            "label": f"Key {idx+1}",
+                            "agent": "",
+                            "key": item.strip(),
+                        })
+                    elif isinstance(item, dict):
+                        token = str(item.get("key") or item.get("apiKey") or "").strip()
+                        if token:
+                            live_specs.append({
+                                "id": str(item.get("id") or f"key-{idx+1}"),
+                                "label": str(item.get("label") or item.get("name") or f"Key {idx+1}"),
+                                "agent": str(item.get("agent") or "").lower(),
+                                "key": token,
+                            })
+
+            for rec in cfg.get("recordedKeys") or []:
+                if not isinstance(rec, dict):
+                    continue
+                token = str(rec.get("key") or "").strip()
+                if token and KEY_REGEX.fullmatch(token):
+                    live_specs.append({
+                        "id": str(rec.get("id") or rec.get("label") or "key"),
+                        "label": str(rec.get("label") or "Key"),
+                        "agent": str(rec.get("agent") or "").lower(),
+                        "key": token,
+                    })
+                else:
+                    recorded_specs.append(rec)
+
+    if auto_discover:
+        auto_sources = [
+            ("crush", "crush_", "crush", home / ".local/share/crush/crush.json"),
+            ("crush", "crush_", "crush", home / ".config/crush/crush.json"),
+            ("hermes", "Hermes", "hermes", home / ".hermes/.env"),
+            ("opencode", "Default key", "opencode", home / ".local/share/opencode/auth.json"),
+            ("paperclip", "Paperclipai", "paperclip", home / "Artificial_idiot/paperclip_ai/.env"),
+        ]
+        for kid, label, agent, path in auto_sources:
+            found = extract_first_key(path)
+            if found:
+                live_specs.append({
+                    "id": kid,
+                    "label": label,
+                    "agent": agent,
+                    "key": found,
+                })
+
+    env_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if env_key:
+        live_specs.append({"id": "env", "label": "Env key", "agent": "", "key": env_key})
+
+    deduped_live: list[dict] = []
+    seen_tokens: set[str] = set()
+    for spec in live_specs:
+        tok = spec["key"]
+        if not tok or tok in seen_tokens:
+            continue
+        seen_tokens.add(tok)
+        deduped_live.append(spec)
+
+    return deduped_live, recorded_specs
+
+
+def call_api_single(spec: dict) -> dict | None:
+    api_key = spec["key"]
+    suffix = api_key[-3:] if len(api_key) >= 6 else "key"
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(
+                API_URL,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "User-Agent": USER_AGENT,
+                },
+            )
+            with urllib.request.urlopen(req, timeout=READ_TIMEOUT) as resp:
+                payload = json.loads(resp.read())
+            data = (payload or {}).get("data") or {}
+            return {
+                "id": spec["id"],
+                "label": spec["label"],
+                "agent": spec.get("agent") or "",
+                "suffix": suffix,
+                "maskedShort": f"…{api_key[-4:]}",
+                "live": True,
+                "disabled": False,
+                "raw": data,
+            }
+        except urllib.error.HTTPError as exc:
+            if 400 <= exc.code < 500:
+                return None
+        except Exception:
+            pass
+        if attempt == 0:
+            time.sleep(1)
+    return None
+
+
+def recorded_to_entry(rec: dict) -> dict:
+    suffix = str(rec.get("suffix") or "")
+    return {
+        "id": str(rec.get("id") or rec.get("label") or "recorded"),
+        "label": str(rec.get("label") or "Key"),
+        "agent": str(rec.get("agent") or "").lower(),
+        "suffix": suffix,
+        "maskedShort": f"…{suffix}" if suffix else "",
+        "live": False,
+        "disabled": bool(rec.get("disabled")),
+        "raw": {
+            "usage_daily": Number(rec.get("usageDaily")),
+            "usage_weekly": Number(rec.get("usageWeekly")),
+            "usage_monthly": Number(rec.get("usageMonthly", rec.get("usageTotal"))),
+            "usage": Number(rec.get("usageTotal")),
+            "limit": NumberOrNone(rec.get("limit")),
+            "limit_remaining": NumberOrNone(rec.get("limitRemaining")),
+            "limit_reset": rec.get("limitReset"),
+        },
+    }
+
+
+def reset_badge(limit_reset: str | None) -> str:
+    if not limit_reset:
+        return "TOTAL"
+    val = str(limit_reset).strip().lower()
+    if "week" in val:
+        return "WEEK"
+    if "month" in val:
+        return "MONTH"
+    if "day" in val or "daily" in val:
+        return "DAY"
+    return val.upper()
+
+
+def aggregate_by_agent(entries: list[dict]) -> dict[str, dict]:
+    """Group key stats by agent id (crush, hermes, opencode, paperclip)."""
+    by_agent: dict[str, dict] = {}
+    for entry in entries:
+        agent = str(entry.get("agent") or "").strip().lower()
+        if not agent:
+            continue
+        raw = entry.get("raw") or {}
+        acc = by_agent.setdefault(agent, {
+            "maskedShort": entry.get("maskedShort") or "",
+            "keyCount": 0,
+            "raw": {
+                "usage_daily": 0.0,
+                "usage_weekly": 0.0,
+                "usage_monthly": 0.0,
+                "usage": 0.0,
+                "limit": 0.0,
+                "limit_remaining": 0.0,
+            },
+        })
+        acc["keyCount"] += 1
+        if entry.get("live") and entry.get("maskedShort"):
+            acc["maskedShort"] = entry["maskedShort"]
+        r = acc["raw"]
+        r["usage_daily"] += Number(raw.get("usage_daily"))
+        r["usage_weekly"] += Number(raw.get("usage_weekly"))
+        r["usage_monthly"] += Number(raw.get("usage_monthly"))
+        r["usage"] += Number(raw.get("usage"))
+        lim = NumberOrNone(raw.get("limit"))
+        rem = NumberOrNone(raw.get("limit_remaining"))
+        if not entry.get("disabled") and lim is not None and lim > 0 and rem is not None:
+            # Prefer active live key cap for the single-agent fuel gauge, or sum
+            # if only one active key exists for that agent.
+            if entry.get("live") or r["limit"] == 0.0:
+                r["limit"] = lim
+                r["limit_remaining"] = max(0.0, rem)
+    for agent, acc in by_agent.items():
+        if acc["keyCount"] > 1:
+            acc["maskedShort"] = f"{acc['keyCount']} keys"
+    return by_agent
+
+
+def build_record(entries: list[dict], *, estimated: bool, offline: bool) -> dict:
+    now = datetime.now(timezone.utc).astimezone()
+    total_daily = 0.0
+    total_weekly = 0.0
+    total_alltime = 0.0
+    total_funded = 0.0
+    total_remaining = 0.0
+    has_any_funded = False
+    active_key_count = 0
+
+    rows = []
+    for entry in entries:
+        raw = entry.get("raw") or {}
+        d_daily = Number(raw.get("usage_daily"))
+        d_weekly = Number(raw.get("usage_weekly"))
+        d_total = Number(raw.get("usage"))
+        limit = NumberOrNone(raw.get("limit"))
+        rem = NumberOrNone(raw.get("limit_remaining"))
+        disabled = bool(entry.get("disabled"))
+        badge = reset_badge(raw.get("limit_reset"))
+
+        total_daily += d_daily
+        total_weekly += d_weekly
+        total_alltime += d_total
+
+        if not disabled:
+            active_key_count += 1
+
+        if not disabled and limit is not None and limit > 0 and rem is not None:
+            has_any_funded = True
+            total_funded += limit
+            total_remaining += max(0.0, rem)
+            spent_on_cap = max(0.0, limit - rem)
+            pct = max(0.0, min(1.0, spent_on_cap / limit))
+            detail = f"${round_money(d_total):.2f} / ${round_money(limit):.0f} {badge} (${round_money(rem):.2f} left)"
+        elif disabled:
+            pct = 0.0
+            detail = f"${round_money(d_total):.2f} spent · DISABLED"
+        else:
+            pct = 0.0
+            detail = f"${round_money(d_total):.2f} spent · {badge}"
+
+        # Skip completely unused 0-spend backup keys so the list stays scannable
+        if d_total <= 0 and d_daily <= 0 and not entry.get("live"):
+            continue
+
+        suffix = entry.get("suffix") or ""
+        title = f"{entry['label']} ({suffix})" if suffix else str(entry["label"])
+        rows.append({
+            "title": title,
+            "label": str(entry["label"]),
+            "percent": pct,
+            "resetsAt": "",
+            "detail": detail,
+            "disabled": disabled,
+            "daily": d_daily,
+            "total": d_total,
+        })
+
+    rows.sort(key=lambda r: (0 if r["disabled"] else 1, r["daily"], r["total"]), reverse=True)
+    limits = [
+        {
+            "label": r["label"],
+            "title": r["title"],
+            "percent": r["percent"],
+            "resetsAt": "",
+            "detail": r["detail"],
+        }
+        for r in rows
+    ]
+
+    balance = None
+    if has_any_funded and total_funded > 0:
+        balance = {
+            "remaining": round(max(0.0, total_remaining), 6),
+            "funded": round_money(total_funded),
+            "spent": round_money(total_funded - total_remaining),
+            "currency": "USD",
+            "estimated": estimated,
+        }
+
+    tier_label = f"{active_key_count} active · {len(entries)} total"
+    if estimated:
+        tier_label += " · est."
+
+    auth_help = (
+        f"${round_money(total_daily):.2f} today"
+        f" · ${round_money(total_weekly):.2f} this week"
+        f" · ${round_money(total_alltime):.2f} all-time"
+    )
+
+    return {
+        "schemaVersion": 1,
+        "id": AGENT_ID,
+        "name": AGENT_NAME,
+        "tagline": AGENT_TAGLINE,
+        "color": ACCENT_COLOR,
+        "barGlyph": BAR_GLYPH,
+        "updatedAt": now.isoformat(timespec="seconds"),
+        "ready": not offline and len(entries) > 0,
+        "hasLocalStats": False,
+        "scope": "account",
+        "usageStatusText": "Offline — showing last known" if offline else "",
+        "authHelpText": auth_help,
+        "limits": limits,
+        "tierLabel": tier_label,
+        "todayPrompts": 0,
+        "todaySessions": 0,
+        "todayTotalTokens": 0,
+        "todayTokensByModel": {},
+        "recentDays": [],
+        "totalPrompts": 0,
+        "totalSessions": 0,
+        "activeDays": 0,
+        "activeDates": [],
+        "modelUsage": {},
+        "balance": balance,
+    }
+
+
+def atomic_write(path: Path, payload: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
+    tmp.write_text(payload)
+    os.replace(tmp, path)
+
+
+def main() -> int:
+    force = "--force" in sys.argv[1:]
+    live_specs, recorded_specs = load_config()
+    recorded_entries = [recorded_to_entry(r) for r in recorded_specs]
+
+    cache = None
+    if CACHE_FILE.is_file():
+        try:
+            cache = json.loads(CACHE_FILE.read_text())
+        except Exception:
+            cache = None
+
+    if not force and cache and isinstance(cache.get("entries"), list):
+        age = time.time() - Number(cache.get("_fetchedAt"))
+        if 0 <= age < CACHE_TTL_SECONDS:
+            record = build_record(cache["entries"], estimated=False, offline=False)
+            atomic_write(STATE_FILE, json.dumps(record, indent=2) + "\n")
+            return 0
+
+    live_entries: list[dict] = []
+    if live_specs:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(live_specs))) as pool:
+            futs = [pool.submit(call_api_single, s) for s in live_specs]
+            for fut in concurrent.futures.as_completed(futs):
+                res = fut.result()
+                if res is not None:
+                    live_entries.append(res)
+
+    if not live_entries and cache and isinstance(cache.get("entries"), list):
+        record = build_record(cache["entries"], estimated=True, offline=True)
+        atomic_write(STATE_FILE, json.dumps(record, indent=2) + "\n")
+        return 0
+
+    all_entries = live_entries + recorded_entries
+    by_name = aggregate_by_agent(all_entries)
+
+    cache_payload = {
+        "_fetchedAt": time.time(),
+        "entries": all_entries,
+        "byName": by_name,
+    }
+    atomic_write(CACHE_FILE, json.dumps(cache_payload, indent=2) + "\n")
+
+    record = build_record(all_entries, estimated=False, offline=False)
+    atomic_write(STATE_FILE, json.dumps(record, indent=2) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

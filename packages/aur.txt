@@ -1,0 +1,3 @@
+# AUR packages (installed with yay). One per line, comments allowed.
+crush-bin       # Charm's Crush coding agent
+bibata-cursor-theme-bin  # Bibata-Modern-Ice cursor (set in hypr/hyprland.lua)

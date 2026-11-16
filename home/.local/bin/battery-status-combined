@@ -1,0 +1,58 @@
+#!/bin/bash
+# Combined battery reading for dual-battery laptops (ThinkPad T480: BAT0 internal + BAT1 external).
+# Drop-in for `omarchy-battery-status --shell`, which only reads the first battery.
+# Used by the cloned power widget in ~/.config/omarchy/plugins/michael.power.
+# Output: tab-separated key/value lines (percentage, state, rate, size, time, cycles, threshold).
+
+set -uo pipefail
+ps=/sys/class/power_supply
+
+now=0 full=0 rate=0 charge_target=0
+cycles=() thresholds=()
+for b in "$ps"/BAT*; do
+  [[ -r $b/energy_now && -r $b/energy_full ]] || continue
+  [[ $(cat "$b/present" 2>/dev/null) == 0 ]] && continue
+  e_now=$(<"$b/energy_now"); e_full=$(<"$b/energy_full")
+  p=$(cat "$b/power_now" 2>/dev/null) || p=0
+  end=$(cat "$b/charge_control_end_threshold" 2>/dev/null) || end=100
+  start=$(cat "$b/charge_control_start_threshold" 2>/dev/null) || start=0
+  now=$((now + e_now)); full=$((full + e_full)); rate=$((rate + ${p#-}))
+  charge_target=$((charge_target + e_full * end / 100))
+  [[ -r $b/cycle_count ]] && cycles+=("$(<"$b/cycle_count")")
+  if (( start > 0 && start != end )); then thresholds+=("${start}-${end}%"); else thresholds+=("${end}%"); fi
+done
+(( full > 0 )) || exit 0
+
+state=$(upower -i /org/freedesktop/UPower/devices/DisplayDevice 2>/dev/null | awk '/state:/ { print $2; exit }')
+[[ $state == pending-charge ]] && state=holding
+
+pct=$(( (now * 100 + full / 2) / full ))
+watts=$(awk -v r="$rate" 'BEGIN { s = sprintf("%.1f", r / 1e6); sub(/\.0$/, "", s); print s }')
+wh=$(( full / 1000000 ))
+
+minutes=""
+if (( rate > 200000 )); then
+  case $state in
+    charging) (( charge_target > now )) && minutes=$(( (charge_target - now) * 60 / rate )) ;;
+    discharging) minutes=$(( now * 60 / rate )) ;;
+  esac
+fi
+time=""
+if [[ -n $minutes ]] && (( minutes > 0 )); then
+  if (( minutes < 60 )); then time=$(omarchy-i18n battery.durationMinutes "$minutes")
+  elif (( minutes % 60 == 0 )); then time=$(omarchy-i18n battery.durationHours "$((minutes / 60))")
+  else time=$(omarchy-i18n battery.durationHoursMinutes "$((minutes / 60))" "$((minutes % 60))")
+  fi
+fi
+
+join() { local IFS='|'; local s="$*"; echo "${s//|/ · }"; }
+threshold=$(printf '%s\n' "${thresholds[@]}" | sort -u | wc -l)
+(( threshold == 1 )) && threshold=${thresholds[0]} || threshold=$(join "${thresholds[@]}")
+
+printf 'percentage\t%s%%\n' "$pct"
+printf 'state\t%s\n' "${state:-unknown}"
+printf 'rate\t%sW\n' "$watts"
+printf 'size\t%sWh\n' "$wh"
+printf 'time\t%s\n' "$time"
+(( ${#cycles[@]} )) && printf 'cycles\t%s\n' "$(join "${cycles[@]}")"
+printf 'threshold\t%s\n' "$threshold"

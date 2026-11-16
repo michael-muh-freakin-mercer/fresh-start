@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# unbench-project <name>: move a project from ~/projects/archive back to active.
+# shellcheck disable=SC2012
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: unbench-project <name>"
+  echo "Benched projects:"
+  ls -1 "$HOME/projects/archive" 2>/dev/null | sed 's/^/  /'
+  exit 1
+fi
+
+src="$HOME/projects/archive/$1"
+dest="$HOME/projects/active/$1"
+
+[[ -d $src ]] || { echo "Not found: $src"; exit 1; }
+[[ -e $dest ]] && { echo "Already active: $dest"; exit 1; }
+
+mkdir -p "$HOME/projects/active"
+mv "$src" "$dest"
+echo "Active: ~/projects/active/$1"
+echo "Read its STATUS.md first:  cat ~/projects/active/$1/STATUS.md"

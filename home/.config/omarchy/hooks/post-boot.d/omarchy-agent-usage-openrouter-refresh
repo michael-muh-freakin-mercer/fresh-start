@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Refresh the omarchy.agents panel record for OpenRouter every 7.5 minutes.
+# Invoked from a post-boot hook; survives shell restarts because it
+# detaches via setsid. omarchy-agent-usage-update only discovers
+# collectors in $OMARCHY_PATH/bin/ (read-only), so the openrouter
+# collector in ~/.local/bin/ runs on its own schedule.
+
+set -euo pipefail
+
+COLLECTOR="$HOME/.local/bin/omarchy-agent-usage-openrouter"
+OUTPUT="$HOME/.local/state/omarchy/agents/usage/openrouter.json"
+LOOP_FILE="$HOME/.cache/omarchy-agent-usage-openrouter-loop.sh"
+PID_FILE="$HOME/.cache/omarchy-agent-usage-openrouter.pid"
+INTERVAL=450
+
+[[ -x $COLLECTOR ]] || exit 0
+
+mkdir -p "$(dirname "$PID_FILE")"
+
+# Skip if a loop is already running.
+if [[ -f $PID_FILE ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+  exit 0
+fi
+
+cat >"$LOOP_FILE" <<EOF
+#!/usr/bin/env bash
+trap 'rm -f "$PID_FILE"' EXIT
+echo "\$\$" > "$PID_FILE"
+while true; do
+  "$COLLECTOR" 2>/dev/null || true
+  sleep $INTERVAL || true
+done
+EOF
+chmod +x "$LOOP_FILE"
+
+setsid "$LOOP_FILE" </dev/null >/dev/null 2>&1 &
+disown 2>/dev/null || true

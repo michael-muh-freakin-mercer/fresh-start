@@ -1,0 +1,18 @@
+#!/bin/bash
+# Bring the herdr terminal window forward, opening one if none is attached.
+# herdr titles its window "<hostname>: <workspace>" (ui.window_title).
+
+address=$(
+  hyprctl clients -j 2>/dev/null |
+    jq -r --arg pattern "^$(hostname): " \
+      'sort_by(.focusHistoryID) | first(.[] | select((.title // "") | test($pattern))).address // empty'
+)
+
+if [[ -n $address ]]; then
+  hyprctl dispatch "hl.dsp.focus({ window = \"address:$address\" })" >/dev/null 2>&1 ||
+    hyprctl dispatch focuswindow "address:$address" >/dev/null
+else
+  # The launcher stays in the foreground for the window's lifetime; detach it
+  # so callers can carry on (agent-launch still has to start the agent).
+  setsid omarchy-launch-terminal-herdr >/dev/null 2>&1 < /dev/null &
+fi
